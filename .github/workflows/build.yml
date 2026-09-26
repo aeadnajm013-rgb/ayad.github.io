@@ -1,0 +1,73 @@
+name: Build Kasher Pro
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+concurrency:
+  group: kasher
+  cancel-in-progress: true
+env:
+  KEY_PASSWORD: ${{ secrets.KEY_PASSWORD || 'BBcf7qDNsd0101Zu5xgiPuqC' }}
+jobs:
+  android:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Prepare
+        run: |
+          Z=$(ls -t *.zip | head -1); echo "Using $Z"; unzip -q -o "$Z" -d w
+          bash w/set-address.sh
+      - uses: actions/setup-java@v4
+        with: { distribution: temurin, java-version: '17' }
+      - uses: gradle/actions/setup-gradle@v4
+        with: { gradle-version: '8.9' }
+      - name: Build APK
+        working-directory: w/android
+        run: gradle assembleRelease -Pvcode=${{ github.run_number }} --no-daemon
+      - run: mkdir -p out && cp w/android/app/build/outputs/apk/release/app-release.apk out/KasherPro.apk
+      - uses: actions/upload-artifact@v4
+        with: { name: apk, path: out/KasherPro.apk }
+
+  windows:
+    runs-on: windows-latest
+    defaults:
+      run: { shell: bash }
+    steps:
+      - uses: actions/checkout@v4
+      - name: Prepare
+        run: |
+          Z=$(ls -t *.zip | head -1); 7z x "$Z" -ow -y > /dev/null
+          bash w/set-address.sh
+      - uses: actions/setup-node@v4
+        with: { node-version: '20' }
+      - name: Build Windows app
+        working-directory: w/desktop
+        run: |
+          npm install --no-audit --no-fund
+          npx electron-builder --win --x64 --publish never
+      - uses: actions/upload-artifact@v4
+        with: { name: exe, path: w/desktop/dist/KasherPro-Setup.exe }
+
+  site:
+    needs: [android, windows]
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+      - run: Z=$(ls -t *.zip | head -1); echo "Using $Z"; unzip -q -o "$Z" -d w && mkdir -p w/site/download
+      - uses: actions/download-artifact@v4
+        with: { path: dl }
+        continue-on-error: true
+      - run: cp dl/apk/KasherPro.apk dl/exe/KasherPro-Setup.exe w/site/download/ 2>/dev/null || true; ls -la w/site/download
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with: { path: w/site }
+      - id: deploy
+        uses: actions/deploy-pages@v4
